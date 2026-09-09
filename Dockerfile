@@ -16,6 +16,7 @@ RUN set -eux; \
       yum -y install ca-certificates tzdata; \
       yum clean all; \
     fi; \
+    python3 -m pip install --no-cache-dir -U pip setuptools; \
     ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime; \
     useradd --uid 10001 --user-group --create-home --home-dir /home/appuser --shell /sbin/nologin appuser; \
     mkdir -p /app; \
