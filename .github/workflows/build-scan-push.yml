@@ -1,0 +1,112 @@
+name: Build scan push
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "*"
+  schedule:
+    - cron: "0 2 * * 1"
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/scott-wong/anolis-secure
+
+jobs:
+  build-scan-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set versioned image metadata
+        id: versioned-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=8.10
+            type=sha,prefix=sha-,format=short
+
+      - name: Build and push versioned image
+        id: push-versioned
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.versioned-meta.outputs.tags }}
+          labels: ${{ steps.versioned-meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan image with Trivy
+        id: trivy
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ steps.push-versioned.outputs.digest }}
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          vuln-type: os,library
+
+      - name: Upload Trivy results to GitHub Security
+        if: always() && !cancelled()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: anolis-secure-8.10
+
+      - name: Block release when CRITICAL or HIGH vulnerabilities exist
+        if: always() && !cancelled()
+        run: |
+          if [[ "${{ steps.trivy.outcome }}" != "success" ]]; then
+            echo "::error::Trivy found CRITICAL or HIGH vulnerabilities, or the scan failed."
+            exit 1
+          fi
+          test -s trivy-results.sarif
+
+      - name: Generate SBOM
+        id: sbom
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.push-versioned.outputs.digest }}
+          format: spdx-json
+          output-file: anolis-secure-8.10.spdx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: anolis-secure-8.10-sbom
+          path: anolis-secure-8.10.spdx.json
+          if-no-files-found: error
+
+      - name: Push latest image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}:latest
+          labels: ${{ steps.versioned-meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
