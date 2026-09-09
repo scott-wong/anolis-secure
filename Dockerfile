@@ -16,7 +16,11 @@ RUN set -eux; \
       yum -y install ca-certificates tzdata; \
       yum clean all; \
     fi; \
-    python3 -m pip install --no-cache-dir -U pip setuptools; \
+    # 基座预装的 pip/setuptools 只是无解释器的残留文件（dnf 升不动），删掉以消除其 CVE
+    rm -rf /usr/lib/python3*/site-packages/pip* \
+           /usr/lib/python3*/site-packages/setuptools* \
+           /usr/lib/python3*/site-packages/pkg_resources* \
+           /usr/bin/pip*; \
     ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime; \
     useradd --uid 10001 --user-group --create-home --home-dir /home/appuser --shell /sbin/nologin appuser; \
     mkdir -p /app; \
